@@ -1,5 +1,18 @@
 #include "HomeKitController.h"
 
+// Global pointer to the HomeKit controller for callback access
+static HomeKitController *globalHomeKitController = nullptr;
+
+// HomeKit pairing callback function
+void homeKitPairingCallback(bool isPaired)
+{
+    Serial.printf("HomeKit: Pairing callback - isPaired: %s\n", isPaired ? "true" : "false");
+    if (globalHomeKitController)
+    {
+        globalHomeKitController->onPairingComplete(isPaired);
+    }
+}
+
 // Forward declaration for filter status enum
 enum FilterStatus
 {
@@ -18,61 +31,127 @@ struct FilterInfo
     String timeLeft;
 };
 
-FilterMaintenanceAccessory::FilterMaintenanceAccessory(FilterInfo *filter, int index) : Service::FilterMaintenance()
+// Filter maintenance implementation using proper HomeKit FilterMaintenance service
+DEV_FilterMaintenance::DEV_FilterMaintenance(FilterInfo *filter, int index) : Service::FilterMaintenance()
 {
     filterRef = filter;
     filterIndex = index;
 
-    // Initialize characteristics with proper values
-    filterChangeIndication = new Characteristic::FilterChangeIndication(0);    // 0=No change needed, 1=Change needed
-    filterLifeLevel = new Characteristic::FilterLifeLevel(filter->percentage); // Percentage remaining
+    // Initialize FilterMaintenance characteristics
+    filterChangeIndication = new Characteristic::FilterChangeIndication(
+        (filter->status == STATUS_REPLACE) ? 1 : 0 // 1=CHANGE_NEEDED, 0=NO_CHANGE_NEEDED
+    );
+
+    filterLifeLevel = new Characteristic::FilterLifeLevel(filter->percentage); // 0-100% remaining
     resetFilterIndication = new Characteristic::ResetFilterIndication();       // Write-only for reset
 
-    // Set initial values based on current filter state
-    updateFromFilter();
-
-    Serial.printf("HomeKit: Created filter accessory %d (%s) with %d%% remaining\n",
-                  index + 1, filter->name.c_str(), filter->percentage);
+    // Only log filter creation during initial setup, not for every filter
+    if (index == 0)
+    {
+        Serial.println("HomeKit: Creating 5 filter maintenance services...");
+    }
+    if (index == 4)
+    {
+        Serial.println("HomeKit: All filter maintenance services created successfully");
+    }
 }
 
-boolean FilterMaintenanceAccessory::update()
+void DEV_FilterMaintenance::loop()
 {
-    // Handle reset filter indication
+    // Update filter status every 10 seconds
+    if (filterLifeLevel->timeVal() > 10000)
+    {
+        updateFromFilter();
+
+        // Log significant changes
+        static int lastReportedPercentage[5] = {-1, -1, -1, -1, -1};
+        if (abs(filterRef->percentage - lastReportedPercentage[filterIndex]) >= 5)
+        {
+            Serial.printf("HomeKit: Filter %d (%s) updated to %d%% - %s\n",
+                          filterIndex + 1, filterRef->name.c_str(), filterRef->percentage,
+                          (filterRef->status == STATUS_REPLACE) ? "CHANGE NEEDED" : "OK");
+            lastReportedPercentage[filterIndex] = filterRef->percentage;
+        }
+    }
+}
+
+boolean DEV_FilterMaintenance::update()
+{
+    // Handle filter reset command from HomeKit
     if (resetFilterIndication->updated())
     {
         if (resetFilterIndication->getNewVal() == 1)
         {
-            // Reset filter - set percentage to 100%
+            // Reset filter to 100%
             filterRef->percentage = 100;
-            filterRef->status = STATUS_OK;    // STATUS_OK
-            filterRef->timeLeft = "6 months"; // Default time
+            filterRef->status = STATUS_OK;
+            filterRef->timeLeft = "6 months";
 
-            Serial.printf("HomeKit: Filter %d (%s) reset via HomeKit to 100%%\n",
+            // Update characteristics immediately
+            filterLifeLevel->setVal(100);
+            filterChangeIndication->setVal(0); // NO_CHANGE_NEEDED
+
+            Serial.printf("HomeKit: Filter %d (%s) reset to 100%% via HomeKit\n",
                           filterIndex + 1, filterRef->name.c_str());
 
-            // Update characteristics to reflect the reset
-            filterLifeLevel->setVal(100);
-            filterChangeIndication->setVal(0);
-
-            // Return true to indicate successful processing
-            return true;
+            return true; // Signal successful handling
         }
     }
 
-    // Always return true to indicate the accessory is working properly
-    return true;
+    return true; // Always return true for proper operation
 }
 
-void FilterMaintenanceAccessory::updateFromFilter()
+void DEV_FilterMaintenance::updateFromFilter()
 {
     if (filterRef)
     {
-        // Update filter life level (percentage)
+        // Update filter life level
         filterLifeLevel->setVal(filterRef->percentage);
 
-        // Update change indication based on status
-        int changeNeeded = (filterRef->status == STATUS_REPLACE) ? 1 : 0; // STATUS_REPLACE
+        // Update change indication based on filter status
+        int changeNeeded = (filterRef->status == STATUS_REPLACE) ? 1 : 0;
         filterChangeIndication->setVal(changeNeeded);
+    }
+}
+
+// Water usage sensor implementation - uses temperature sensor to report water usage
+DEV_WaterUsageSensor::DEV_WaterUsageSensor(unsigned int *waterUsage) : Service::TemperatureSensor()
+{
+    waterUsageRef = waterUsage;
+
+    // Use temperature to represent water usage (scaled down by 10 to fit in reasonable temperature range)
+    // 1000 liters = 100°C, 500 liters = 50°C etc.
+    float scaledUsage = (*waterUsage) / 10.0f;
+    temperature = new Characteristic::CurrentTemperature(scaledUsage);
+    temperature->setRange(0, 500); // 0-5000 liters range
+
+    Serial.println("HomeKit: Water usage sensor created");
+}
+
+void DEV_WaterUsageSensor::loop()
+{
+    // Update water usage every 30 seconds
+    if (temperature->timeVal() > 30000)
+    {
+        float scaledUsage = (*waterUsageRef) / 10.0f;
+        temperature->setVal(scaledUsage);
+
+        // Log significant changes
+        static unsigned int lastReportedUsage = 0;
+        if (abs((int)(*waterUsageRef) - (int)lastReportedUsage) >= 50)
+        {
+            Serial.printf("HomeKit: Water usage updated to %d liters\n", *waterUsageRef);
+            lastReportedUsage = *waterUsageRef;
+        }
+    }
+}
+
+void DEV_WaterUsageSensor::updateFromUsage()
+{
+    if (waterUsageRef)
+    {
+        float scaledUsage = (*waterUsageRef) / 10.0f;
+        temperature->setVal(scaledUsage);
     }
 }
 
@@ -83,14 +162,18 @@ HomeKitController::HomeKitController()
     setupCode = "466-37-726"; // Default setup code
     lastUpdate = 0;
 
-    // Initialize filter accessory pointers
+    // Initialize service pointers
     for (int i = 0; i < 5; i++)
     {
-        filterAccessories[i] = nullptr;
+        filterMaintenanceServices[i] = nullptr;
     }
+    waterUsageSensor = nullptr;
+
+    // Set global pointer for callback access
+    globalHomeKitController = this;
 }
 
-void HomeKitController::begin(FilterInfo filters[5])
+void HomeKitController::begin(FilterInfo filters[5], unsigned int *waterUsage)
 {
     if (initialized)
     {
@@ -100,28 +183,22 @@ void HomeKitController::begin(FilterInfo filters[5])
 
     Serial.println("HomeKit: ========== INITIALIZING HOMESPAN ==========");
 
-    // Check WiFi status before starting
-    if (WiFi.status() != WL_CONNECTED)
-    {
-        Serial.println("HomeKit: WARNING - WiFi not connected! HomeKit may not work properly.");
-        Serial.printf("HomeKit: WiFi Status: %d\n", WiFi.status());
-    }
-    else
-    {
-        Serial.printf("HomeKit: WiFi connected - IP: %s, Hostname: %s\n",
-                      WiFi.localIP().toString().c_str(), WiFi.getHostname());
-    }
-
     // Initialize preferences for HomeKit data storage
-    Serial.println("HomeKit: Initializing preferences...");
     prefs.begin("homekit", false);
 
-    // Set up HomeSpan with improved configuration
-    Serial.println("HomeKit: Starting HomeSpan.begin()...");
+    // Set up HomeSpan with clean configuration
+    // Set WiFi hostname before HomeSpan initialization (no spaces, DNS-friendly)
+    WiFi.setHostname("RO-Monitor-Bridge");
+
     try
     {
+        // Simple HomeSpan initialization - HomeSpan will manage WiFi
         homeSpan.begin(Category::Bridges, "RO Monitor Bridge");
-        Serial.println("HomeKit: HomeSpan.begin() completed successfully");
+        Serial.println("HomeKit: HomeSpan initialized successfully");
+
+        // Enable auto-start Access Point (HomeSpan uses default credentials)
+        homeSpan.enableAutoStartAP();
+        Serial.println("HomeKit: Access Point enabled with default credentials");
     }
     catch (...)
     {
@@ -130,16 +207,18 @@ void HomeKitController::begin(FilterInfo filters[5])
         return;
     }
 
-    // Enable maximum logging for debugging
-    Serial.println("HomeKit: Setting log level to maximum (2)...");
-    homeSpan.setLogLevel(2);
+    // Set minimal logging to reduce serial output (0=minimal, 1=normal, 2=verbose)
+    Serial.println("HomeKit: Setting log level to minimal (0) to reduce output...");
+    homeSpan.setLogLevel(0);
 
     // Use the default setup code
     setupCode = "466-37-726"; // Default HomeSpan setup code
-    Serial.printf("HomeKit: Using setup code: %s\n", setupCode.c_str());
+    Serial.printf("HomeKit: Setup code: %s\n", setupCode.c_str());
+    Serial.println("HomeKit: WiFi Configuration:");
+    Serial.println("HomeKit: - Type 'W' in serial monitor for manual WiFi setup");
+    Serial.println("HomeKit: - Or connect to HomeSpan's default AP for web setup");
 
     // Create bridge accessory (required for multiple accessories)
-    Serial.println("HomeKit: Creating bridge accessory...");
     new SpanAccessory();
     new Service::AccessoryInformation();
     new Characteristic::Identify();
@@ -147,16 +226,12 @@ void HomeKitController::begin(FilterInfo filters[5])
     new Characteristic::SerialNumber("RO001");
     new Characteristic::Model("ESP32-RO-v1");
     new Characteristic::FirmwareRevision("1.0.0");
-    Serial.println("HomeKit: Bridge accessory created");
 
-    // Create filter accessories
+    // Create filter maintenance accessories
     const char *filterNames[] = {"PP1 Filter", "PP2 Filter", "Carbon Filter", "RO Membrane", "Mineralizer"};
 
-    Serial.println("HomeKit: Creating filter accessories...");
     for (int i = 0; i < 5; i++)
     {
-        Serial.printf("HomeKit: Creating filter accessory %d: %s\n", i + 1, filterNames[i]);
-
         // Create a new accessory for each filter
         new SpanAccessory();
         new Service::AccessoryInformation();
@@ -167,15 +242,13 @@ void HomeKitController::begin(FilterInfo filters[5])
         new Characteristic::Name(filterNames[i]);
         new Characteristic::FirmwareRevision("1.0.0");
 
-        // Add filter maintenance service
-        filterAccessories[i] = new FilterMaintenanceAccessory(&filters[i], i);
-        Serial.printf("HomeKit: Filter accessory %d created successfully\n", i + 1);
+        // Add FilterMaintenance service with proper HomeKit characteristics
+        filterMaintenanceServices[i] = new DEV_FilterMaintenance(&filters[i], i);
 
         // Small delay to ensure proper initialization
         delay(10);
     }
 
-    Serial.println("HomeKit: Creating water usage sensor...");
     // Create water usage sensor accessory
     new SpanAccessory();
     new Service::AccessoryInformation();
@@ -186,25 +259,21 @@ void HomeKitController::begin(FilterInfo filters[5])
     new Characteristic::Name("Water Usage");
     new Characteristic::FirmwareRevision("1.0.0");
 
-    new Service::LeakSensor();           // Use leak sensor as a placeholder for water monitoring
-    new Characteristic::LeakDetected(0); // 0 = No leak detected
-    new Characteristic::StatusActive(1); // 1 = Active
-    new Characteristic::StatusFault(0);  // 0 = No fault
-    Serial.println("HomeKit: Water usage sensor created");
-
-    Serial.println("HomeKit: All accessories created successfully!");
+    // Add water usage sensor service (using temperature to represent usage)
+    waterUsageSensor = new DEV_WaterUsageSensor(waterUsage);
 
     // Final initialization
     initialized = true;
     status = HOMEKIT_WAITING_FOR_PAIRING;
 
-    Serial.println("HomeKit: ========== HOMEKIT READY ==========");
-    Serial.printf("HomeKit: Setup code: %s\n", setupCode.c_str());
-    Serial.printf("HomeKit: Device name: RO Monitor Bridge\n");
-    Serial.printf("HomeKit: Total accessories: 7 (1 bridge + 5 filters + 1 sensor)\n");
-    Serial.println("HomeKit: Ready for pairing with iOS Home app!");
-    Serial.println("HomeKit: Look for 'RO Monitor Bridge' in Home app");
-    Serial.println("HomeKit: ==========================================");
+    Serial.println("HomeKit: ========== READY FOR PAIRING ==========");
+    Serial.printf("HomeKit: Setup code: %s | Device: RO Monitor Bridge\n", setupCode.c_str());
+    Serial.printf("HomeKit: Services: 6 total (5 filter maintenance + 1 water usage sensor)\n");
+    Serial.println("HomeKit: Look for 'RO Monitor Bridge' in iOS Home app");
+    Serial.println("HomeKit: Filter status shown as FilterChangeIndication & FilterLifeLevel");
+    Serial.println("HomeKit: Water usage shown as temperature, filters support reset via HomeKit");
+    Serial.println("HomeKit: ============================================");
+    ;
 }
 
 void HomeKitController::update()
@@ -217,18 +286,17 @@ void HomeKitController::update()
     // Update HomeSpan - this is critical and should be called frequently
     homeSpan.poll();
 
-    // Simple status monitoring without unavailable methods
+    // Check pairing status using HomeSpan's pairing callbacks and status
+    static bool wasPaired = false;
     static unsigned long lastStatusCheck = 0;
     static unsigned long lastConnectionLog = 0;
 
-    // Check general status every 5 seconds
-    if (millis() - lastStatusCheck > 5000)
+    // Check pairing status every 30 seconds (reduced from 2 seconds)
+    if (millis() - lastStatusCheck > 30000)
     {
-        // In HomeSpan 1.9.1, we don't have direct access to controller count
-        // We'll rely on the setup code being displayed and manual status updates
-        Serial.println("HomeKit: Status check - HomeSpan running, waiting for pairing...");
+        // For HomeSpan 1.9.1, we need to monitor the serial output or use callbacks
+        // For now, we'll use a simpler status tracking approach
 
-        // Assume we're waiting for pairing unless manually updated
         if (status == HOMEKIT_NOT_INITIALIZED)
         {
             status = HOMEKIT_WAITING_FOR_PAIRING;
@@ -237,32 +305,41 @@ void HomeKitController::update()
         lastStatusCheck = millis();
     }
 
-    // Log connection status every 15 seconds
-    if (millis() - lastConnectionLog > 15000)
+    // Log connection status every 5 minutes (reduced from 15 seconds)
+    if (millis() - lastConnectionLog > 300000)
     {
-        Serial.printf("HomeKit: WiFi: %s, Setup Code: %s\n",
-                      WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected",
+        Serial.printf("HomeKit: Status: %s, Setup Code: %s\n",
+                      getStatusString().c_str(),
                       setupCode.c_str());
 
         if (WiFi.status() == WL_CONNECTED)
         {
-            Serial.printf("HomeKit: WiFi IP: %s, mDNS advertising as '%s.local'\n",
+            Serial.printf("HomeKit: WiFi IP: %s, mDNS: %s.local\n",
                           WiFi.localIP().toString().c_str(),
                           WiFi.getHostname());
+        }
+        else
+        {
+            Serial.println("HomeKit: WARNING - WiFi disconnected!");
         }
 
         lastConnectionLog = millis();
     }
 
-    // Periodically update filter accessories
+    // Periodically update services (the services handle their own timing in their loop() methods)
+    // This is just for fallback manual updates if needed
     if (millis() - lastUpdate > updateInterval)
     {
         for (int i = 0; i < 5; i++)
         {
-            if (filterAccessories[i])
+            if (filterMaintenanceServices[i])
             {
-                filterAccessories[i]->updateFromFilter();
+                filterMaintenanceServices[i]->updateFromFilter();
             }
+        }
+        if (waterUsageSensor)
+        {
+            waterUsageSensor->updateFromUsage();
         }
         lastUpdate = millis();
     }
@@ -290,19 +367,26 @@ bool HomeKitController::isPaired()
     return (status == HOMEKIT_PAIRED || status == HOMEKIT_RUNNING);
 }
 
-void HomeKitController::updateFilterAccessories(FilterInfo filters[5])
+void HomeKitController::updateSensors(FilterInfo filters[5], unsigned int waterUsage)
 {
     if (!initialized)
     {
         return;
     }
 
+    // Update filter maintenance services
     for (int i = 0; i < 5; i++)
     {
-        if (filterAccessories[i])
+        if (filterMaintenanceServices[i])
         {
-            filterAccessories[i]->updateFromFilter();
+            filterMaintenanceServices[i]->updateFromFilter();
         }
+    }
+
+    // Update water usage sensor
+    if (waterUsageSensor)
+    {
+        waterUsageSensor->updateFromUsage();
     }
 }
 
@@ -373,5 +457,19 @@ void HomeKitController::setPairingStatus(bool paired)
     {
         status = HOMEKIT_WAITING_FOR_PAIRING;
         Serial.println("HomeKit: Status manually set to WAITING_FOR_PAIRING");
+    }
+}
+
+void HomeKitController::onPairingComplete(bool paired)
+{
+    if (paired)
+    {
+        status = HOMEKIT_RUNNING;
+        Serial.println("HomeKit: PAIRING SUCCESSFUL! Device is now connected to HomeKit");
+    }
+    else
+    {
+        status = HOMEKIT_WAITING_FOR_PAIRING;
+        Serial.println("HomeKit: Pairing removed or failed - back to waiting state");
     }
 }

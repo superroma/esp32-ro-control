@@ -16,19 +16,33 @@ enum HomeKitStatus
     HOMEKIT_ERROR
 };
 
-class FilterMaintenanceAccessory : public Service::FilterMaintenance
+// Custom pairing callback to track HomeKit pairing status
+extern void homeKitPairingCallback(bool isPaired);
+
+// Filter maintenance service using proper HomeKit FilterMaintenance service
+struct DEV_FilterMaintenance : Service::FilterMaintenance
 {
-private:
-    SpanCharacteristic *filterChangeIndication;
-    SpanCharacteristic *filterLifeLevel;
-    SpanCharacteristic *resetFilterIndication;
+    SpanCharacteristic *filterChangeIndication; // 0=NO_CHANGE_NEEDED, 1=CHANGE_NEEDED
+    SpanCharacteristic *filterLifeLevel;        // Filter life remaining as percentage (0-100)
+    SpanCharacteristic *resetFilterIndication;  // Write-only characteristic for filter reset
     FilterInfo *filterRef;
     int filterIndex;
 
-public:
-    FilterMaintenanceAccessory(FilterInfo *filter, int index);
+    DEV_FilterMaintenance(FilterInfo *filter, int index);
+    void loop() override;
     boolean update() override;
     void updateFromFilter();
+};
+
+// Water usage sensor that reports total water usage
+struct DEV_WaterUsageSensor : Service::TemperatureSensor
+{
+    SpanCharacteristic *temperature; // We'll use temperature to represent water usage (in hundreds of liters)
+    unsigned int *waterUsageRef;
+
+    DEV_WaterUsageSensor(unsigned int *waterUsage);
+    void loop() override;
+    void updateFromUsage();
 };
 
 class HomeKitController
@@ -38,22 +52,24 @@ private:
     HomeKitStatus status;
     bool initialized;
     String setupCode;
-    FilterMaintenanceAccessory *filterAccessories[5];
+    DEV_FilterMaintenance *filterMaintenanceServices[5];
+    DEV_WaterUsageSensor *waterUsageSensor;
     unsigned long lastUpdate;
-    const unsigned long updateInterval = 5000; // Update every 5 seconds
+    const unsigned long updateInterval = 10000; // Update every 10 seconds
 
 public:
     HomeKitController();
-    void begin(FilterInfo filters[5]);
+    void begin(FilterInfo filters[5], unsigned int *waterUsage);
     void update();
     HomeKitStatus getStatus();
     String getSetupCode();
     bool isPaired();
-    void updateFilterAccessories(FilterInfo filters[5]);
+    void updateSensors(FilterInfo filters[5], unsigned int waterUsage);
     String getStatusString();
     void resetPairing();
-    void printDiagnostics();            // New diagnostic method
-    void setPairingStatus(bool paired); // Manual pairing status update
+    void printDiagnostics();             // New diagnostic method
+    void setPairingStatus(bool paired);  // Manual pairing status update
+    void onPairingComplete(bool paired); // Callback for pairing status
 };
 
 #endif

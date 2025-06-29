@@ -2,7 +2,6 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "ButtonLogic.h"
-#include "WiFiController.h"
 #include "HomeKitController.h"
 
 #define SCREEN_WIDTH 128
@@ -17,7 +16,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // --- Screen and Filter Management ---
 #define BUTTON_LEFT_PIN 4  // Previous screen
 #define BUTTON_RIGHT_PIN 5 // Next screen (changed from 2 to 5)
-#define NUM_SCREENS 9      // Normal screens + WiFi status screen + HomeKit screen
+#define NUM_SCREENS 8      // Normal screens + HomeKit screen (removed WiFi status screen)
 
 enum ScreenType
 {
@@ -28,8 +27,7 @@ enum ScreenType
   SCREEN_MEMBRANE,
   SCREEN_MINERALIZER,
   SCREEN_USAGE,
-  SCREEN_WIFI_STATUS,    // WiFi status screen
-  SCREEN_HOMEKIT_STATUS, // New HomeKit status screen
+  SCREEN_HOMEKIT_STATUS, // HomeKit status screen
   SCREEN_COUNTER_RESET
 };
 
@@ -56,9 +54,6 @@ volatile int currentScreen = 0;
 // ButtonLogic instance for clean button handling
 ButtonLogic buttonLogic;
 
-// WiFi Controller instance
-WiFiController wifiController;
-
 // HomeKit Controller instance
 HomeKitController homeKitController;
 
@@ -67,6 +62,10 @@ volatile bool leftButtonCurrentlyPressed = false;
 volatile bool rightButtonCurrentlyPressed = false;
 volatile bool leftButtonJustReleased = false;
 volatile bool rightButtonJustReleased = false;
+
+// Reduce frequent serial messages - only log status once per minute
+unsigned long lastStatusMessageTime = 0;
+const unsigned long statusMessageInterval = 60000; // 60 seconds
 
 // Filter data
 FilterInfo filters[5] = {
@@ -79,7 +78,6 @@ FilterInfo filters[5] = {
 unsigned int totalWaterUsed = 1234; // Liters
 
 // Function declarations
-void drawWiFiStatusScreen();
 void drawHomeKitStatusScreen();
 void drawCounterResetScreen();
 void drawUsageScreen();
@@ -226,14 +224,22 @@ void IRAM_ATTR handleLeftButton()
   {
     // Button just pressed
     leftButtonCurrentlyPressed = true;
-    Serial.println("Left button pressed!");
+    // Reduced logging - only show button activity every minute
+    if (millis() - lastStatusMessageTime > statusMessageInterval)
+    {
+      Serial.println("Left button pressed!");
+    }
   }
   else if (!currentState && leftButtonCurrentlyPressed)
   {
     // Button just released
     leftButtonCurrentlyPressed = false;
     leftButtonJustReleased = true;
-    Serial.println("Left button released!");
+    // Reduced logging - only show button activity every minute
+    if (millis() - lastStatusMessageTime > statusMessageInterval)
+    {
+      Serial.println("Left button released!");
+    }
   }
 }
 
@@ -246,14 +252,22 @@ void IRAM_ATTR handleRightButton()
   {
     // Button just pressed
     rightButtonCurrentlyPressed = true;
-    Serial.println("Right button pressed!");
+    // Reduced logging - only show button activity every minute
+    if (millis() - lastStatusMessageTime > statusMessageInterval)
+    {
+      Serial.println("Right button pressed!");
+    }
   }
   else if (!currentState && rightButtonCurrentlyPressed)
   {
     // Button just released
     rightButtonCurrentlyPressed = false;
     rightButtonJustReleased = true;
-    Serial.println("Right button released!");
+    // Reduced logging - only show button activity every minute
+    if (millis() - lastStatusMessageTime > statusMessageInterval)
+    {
+      Serial.println("Right button released!");
+    }
   }
 }
 
@@ -289,48 +303,17 @@ void setup()
   updateFilterStatus();
   lastScreenChange = millis();
 
-  // Initialize WiFi - show setup screen first
-  Serial.println("Initializing WiFi...");
-  display.clearDisplay();
-
-  // Show WiFi setup instructions
-  display.setTextSize(1);
-  drawCenteredText("WiFi Setup Required", 8, 1);
-
-  // Network name
-  display.setCursor(0, 22);
-  display.print("Network:");
-  display.setCursor(50, 22);
-  display.print("RO-Monitor-Setup");
-
-  // Password
-  display.setCursor(0, 32);
-  display.print("Password:");
-  display.setCursor(50, 32);
-  display.print("setup123");
-
-  // IP Address
-  display.setCursor(0, 42);
-  display.print("Setup IP:");
-  display.setCursor(50, 42);
-  display.print("192.168.4.1");
-
-  // Status
-  drawCenteredText("Starting...", 54, 1);
-  display.display();
-
-  // Initialize WiFi controller
-  wifiController.begin();
-
-  // Show WiFi status after initialization
-  delay(2000);
-  drawWiFiStatusScreen();
-  delay(3000);
-
-  // Initialize HomeKit after WiFi (will start once WiFi is connected)
+  // Initialize HomeKit (HomeSpan will handle WiFi configuration)
   Serial.println("Starting HomeKit initialization...");
-  drawCenteredText("Starting HomeKit", 54, 1);
+  display.clearDisplay();
+  drawCenteredText("Starting HomeKit", 20, 2);
+  drawCenteredText("WiFi Setup:", 35, 1);
+  drawCenteredText("Check Serial Monitor", 45, 1);
   display.display();
+
+  // HomeSpan will handle WiFi and display instructions in serial monitor
+  homeKitController.begin(filters, &totalWaterUsed);
+
   delay(1000);
 }
 
@@ -452,28 +435,14 @@ void drawCounterResetScreen()
   else
   {
     // Show confirmation screen with context-specific messages
-    if (currentScreen == SCREEN_WIFI_STATUS)
-    {
-      display.setTextSize(2);
-      drawCenteredText("RESET", 0, 2);
-      drawCenteredText("WIFI?", 20, 2);
+    display.setTextSize(2);
+    drawCenteredText("RESET", 0, 2);
+    drawCenteredText("COUNTER?", 20, 2);
 
-      // Warning message
-      display.setTextSize(1);
-      drawCenteredText("This will reset", 42, 1);
-      drawCenteredText("WiFi settings", 52, 1);
-    }
-    else
-    {
-      display.setTextSize(2);
-      drawCenteredText("RESET", 0, 2);
-      drawCenteredText("COUNTER?", 20, 2);
-
-      // Warning message
-      display.setTextSize(1);
-      drawCenteredText("This will reset", 42, 1);
-      drawCenteredText("all water usage", 52, 1);
-    }
+    // Warning message
+    display.setTextSize(1);
+    drawCenteredText("This will reset", 42, 1);
+    drawCenteredText("all water usage", 52, 1);
 
     // Physical button instructions at bottom
     display.setTextSize(1);
@@ -483,116 +452,6 @@ void drawCounterResetScreen()
     display.setCursor(90, 56);
     display.print("OK");
   }
-
-  display.display();
-}
-
-void drawWiFiStatusScreen()
-{
-  display.clearDisplay();
-
-  // Title
-  drawCenteredText("WIFI INFO", 0, 2);
-
-  if (wifiController.isConnected())
-  {
-    // Network name (SSID)
-    display.setTextSize(1);
-    display.setCursor(0, 18);
-    display.print("Network:");
-    String ssid = wifiController.getSSID();
-    if (ssid.length() > 10)
-    {
-      ssid = ssid.substring(0, 7) + "...";
-    }
-    display.setCursor(50, 18);
-    display.print(ssid);
-
-    // IP Address
-    display.setCursor(0, 28);
-    display.print("IP:");
-    String ip = wifiController.getIPAddress();
-    display.setCursor(20, 28);
-    display.print(ip);
-
-    // Signal strength
-    int rssi = wifiController.getRSSI();
-    display.setCursor(0, 38);
-    display.print("Signal:");
-    display.setCursor(45, 38);
-    display.print(String(rssi) + "dBm");
-
-    // Connection status
-    display.setCursor(0, 48);
-    display.print("Status: Connected");
-
-    // Signal strength bar (visual indicator)
-    int signalBars = 0;
-    if (rssi > -50)
-      signalBars = 4;
-    else if (rssi > -60)
-      signalBars = 3;
-    else if (rssi > -70)
-      signalBars = 2;
-    else if (rssi > -80)
-      signalBars = 1;
-
-    // Draw signal bars in top right
-    int barX = 100;
-    int barY = 18;
-    for (int i = 0; i < 4; i++)
-    {
-      int barHeight = (i + 1) * 2;
-      if (i < signalBars)
-      {
-        display.fillRect(barX + i * 4, barY + 8 - barHeight, 3, barHeight, WHITE);
-      }
-      else
-      {
-        display.drawRect(barX + i * 4, barY + 8 - barHeight, 3, barHeight, WHITE);
-      }
-    }
-  }
-  else if (wifiController.getStatus() == WiFiStatus::CONFIG_MODE)
-  {
-    // Show setup instructions with network details
-    display.setTextSize(1);
-    drawCenteredText("WiFi Setup Mode", 18, 1);
-
-    // Network name
-    display.setCursor(0, 30);
-    display.print("Network:");
-    display.setCursor(50, 30);
-    display.print(wifiController.getAPName());
-
-    // Password
-    display.setCursor(0, 40);
-    display.print("Password:");
-    display.setCursor(50, 40);
-    display.print(wifiController.getAPPassword());
-
-    // IP Address
-    display.setCursor(0, 50);
-    display.print("Setup IP:");
-    display.setCursor(50, 50);
-    display.print(wifiController.getAPIP());
-  }
-  else
-  {
-    // Show connection attempts or error
-    drawCenteredText("Not Connected", 28, 1);
-    drawCenteredText("Check Settings", 38, 1);
-  }
-
-  // Device name at bottom right
-  display.setTextSize(1);
-  String deviceName = wifiController.getDeviceName();
-  if (deviceName.length() > 12)
-  {
-    deviceName = deviceName.substring(0, 9) + "...";
-  }
-  display.setCursor(128 - deviceName.length() * 6, 58);
-  display.print(deviceName);
 
   display.display();
 }
@@ -648,25 +507,37 @@ void drawHomeKitStatusScreen()
   {
     // Connected and running
     display.setTextSize(1);
-    drawCenteredText("HomeKit Active", 18, 1);
+    drawCenteredText("HomeKit Active", 16, 1);
 
-    // Connected icon
-    display.fillCircle(10, 28, 3, WHITE);
-    display.setCursor(18, 25);
-    display.print("Connected");
+    // Show WiFi info since HomeSpan manages it
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      display.setCursor(0, 26);
+      display.print("WiFi: ");
+      String ssid = WiFi.SSID();
+      if (ssid.length() > 10)
+      {
+        ssid = ssid.substring(0, 7) + "...";
+      }
+      display.print(ssid);
 
-    // Device count
-    display.setCursor(0, 35);
+      display.setCursor(0, 36);
+      display.print("IP: ");
+      display.print(WiFi.localIP().toString());
+    }
+    else
+    {
+      display.setCursor(0, 26);
+      display.print("WiFi: Not connected");
+    }
+
+    // HomeKit status
+    display.setCursor(0, 46);
     display.print("Filters: 5 active");
 
-    // Usage sensor
-    display.setCursor(0, 45);
-    display.print("Usage: Monitoring");
-
-    // Instructions
-    display.setTextSize(1);
-    display.setCursor(0, 55);
-    display.print("Use iOS Home app");
+    display.setCursor(0, 56);
+    display.print("Setup: ");
+    display.print(homeKitController.getSetupCode());
   }
   else
   {
@@ -702,14 +573,22 @@ void processButtons()
     // Previous screen (only normal screens)
     currentScreen = (currentScreen - 1 + NUM_SCREENS) % NUM_SCREENS;
     lastScreenChange = millis();
-    Serial.println("Left button released - previous screen");
+    // Reduced logging - only show navigation every minute
+    if (millis() - lastStatusMessageTime > statusMessageInterval)
+    {
+      Serial.println("Left button released - previous screen");
+    }
     break;
 
   case ButtonEvent::RIGHT_RELEASED:
     // Next screen (only normal screens)
     currentScreen = (currentScreen + 1) % NUM_SCREENS;
     lastScreenChange = millis();
-    Serial.println("Right button released - next screen");
+    // Reduced logging - only show navigation every minute
+    if (millis() - lastStatusMessageTime > statusMessageInterval)
+    {
+      Serial.println("Right button released - next screen");
+    }
     break;
 
   case ButtonEvent::RESET_PROGRESS_STARTED:
@@ -742,19 +621,8 @@ void processButtons()
       filters[i].timeLeft = "12 months";
     }
 
-    // Special case: if we're on WiFi screen, also reset WiFi settings
-    if (currentScreen == SCREEN_WIFI_STATUS)
-    {
-      Serial.println("Also resetting WiFi settings!");
-      wifiController.resetSettings();
-      // Restart WiFi setup
-      display.clearDisplay();
-      drawCenteredText("WIFI RESET", 20, 2);
-      drawCenteredText("Restarting...", 40, 1);
-      display.display();
-      delay(2000);
-      wifiController.begin();
-    }
+    // Note: WiFi reset removed since HomeSpan manages WiFi
+    // To reset WiFi, use HomeSpan serial commands or reset device
 
     currentScreen = SCREEN_DASHBOARD;
     break;
@@ -815,9 +683,7 @@ void loop()
       Serial.println("R/r = Right button press/release");
       Serial.println("B/b = Both buttons press");
       Serial.println("U/u = Both buttons release");
-      Serial.println("W/w = WiFi status");
-      Serial.println("C/c = Start WiFi config portal");
-      Serial.println("X/x = Reset WiFi settings");
+      Serial.println("W/w = WiFi configuration (HomeSpan)");
       Serial.println("K/k = HomeKit status");
       Serial.println("D/d = HomeKit diagnostics");
       Serial.println("P/p = Reset HomeKit pairing");
@@ -826,24 +692,19 @@ void loop()
       break;
     case 'W':
     case 'w':
-      Serial.println("WiFi Status:");
-      Serial.printf("Status: %s\n", wifiController.getStatusString().c_str());
-      Serial.printf("SSID: %s\n", wifiController.getSSID().c_str());
-      Serial.printf("IP: %s\n", wifiController.getIPAddress().c_str());
-      Serial.printf("RSSI: %d dBm\n", wifiController.getRSSI());
-      Serial.printf("Device: %s\n", wifiController.getDeviceName().c_str());
-      break;
-    case 'C':
-    case 'c':
-      Serial.println("Starting WiFi config portal...");
-      wifiController.startConfigPortal();
-      break;
-    case 'X':
-    case 'x':
-      Serial.println("Resetting WiFi settings...");
-      wifiController.resetSettings();
-      delay(1000);
-      wifiController.begin();
+      Serial.println("WiFi Status (HomeSpan managed):");
+      if (WiFi.status() == WL_CONNECTED)
+      {
+        Serial.printf("Connected to: %s\n", WiFi.SSID().c_str());
+        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+        Serial.printf("Hostname: %s\n", WiFi.getHostname());
+      }
+      else
+      {
+        Serial.println("Not connected - use HomeSpan serial commands");
+        Serial.println("Type 'W' (capital) in HomeSpan to configure WiFi");
+      }
       break;
     case 'K':
     case 'k':
@@ -872,27 +733,34 @@ void loop()
   // Process button inputs
   processButtons();
 
-  // Update WiFi controller
-  wifiController.update();
-
-  // Initialize HomeKit when WiFi is connected (one-time initialization)
-  static bool homeKitInitialized = false;
-  if (!homeKitInitialized && wifiController.isConnected())
-  {
-    Serial.println("WiFi connected, initializing HomeKit...");
-    homeKitController.begin(filters);
-    homeKitInitialized = true;
-  }
-
-  // Update HomeKit controller if initialized
-  if (homeKitInitialized)
-  {
-    homeKitController.update();
-    homeKitController.updateFilterAccessories(filters);
-  }
+  // Update HomeKit controller (HomeSpan manages WiFi internally)
+  homeKitController.update();
+  homeKitController.updateSensors(filters, totalWaterUsed);
 
   // Update filter status
   updateFilterStatus();
+
+  // Print comprehensive status once per minute instead of frequent small messages
+  if (millis() - lastStatusMessageTime >= statusMessageInterval)
+  {
+    lastStatusMessageTime = millis();
+
+    Serial.println("========== RO MONITOR STATUS ==========");
+    Serial.printf("Uptime: %lu min | Screen: %d | Filters: PP1:%d%% PP2:%d%% CAR:%d%% MEM:%d%% MIN:%d%%\n",
+                  millis() / 60000, currentScreen,
+                  filters[0].percentage, filters[1].percentage, filters[2].percentage,
+                  filters[3].percentage, filters[4].percentage);
+    Serial.printf("HomeKit: %s | WiFi: %s",
+                  homeKitController.getStatusString().c_str(),
+                  (WiFi.status() == WL_CONNECTED) ? WiFi.SSID().c_str() : "Disconnected");
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      Serial.printf(" (%s)", WiFi.localIP().toString().c_str());
+    }
+    Serial.println();
+    Serial.printf("Water Usage: %d L | Free Heap: %d bytes\n", totalWaterUsed, ESP.getFreeHeap());
+    Serial.println("=======================================");
+  }
 
   // Auto-rotate screens (only if not showing counter reset)
   if (!buttonLogic.isInResetMode() && millis() - lastScreenChange > screenInterval)
@@ -924,9 +792,6 @@ void loop()
     break;
   case SCREEN_USAGE:
     drawUsageScreen();
-    break;
-  case SCREEN_WIFI_STATUS:
-    drawWiFiStatusScreen();
     break;
   case SCREEN_HOMEKIT_STATUS:
     drawHomeKitStatusScreen();
