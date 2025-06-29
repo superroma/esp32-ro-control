@@ -70,7 +70,7 @@ void test_reset_progress_complete_flow()
     buttons.leftJustReleased = false;
     buttons.rightJustReleased = false;
     event = buttonLogic->processButtons(buttons, time); // Clear the ignore flag
-    
+
     buttons.leftJustReleased = true;
     event = buttonLogic->processButtons(buttons, time);
     TEST_ASSERT_EQUAL(ButtonEvent::RESET_CANCELLED, event);
@@ -120,7 +120,7 @@ void test_reset_confirmed()
     buttons.leftJustReleased = false;
     buttons.rightJustReleased = false;
     buttonLogic->processButtons(buttons, time); // Clear the ignore flag
-    
+
     buttons.rightJustReleased = true;
     ButtonEvent event = buttonLogic->processButtons(buttons, time);
     TEST_ASSERT_EQUAL(ButtonEvent::RESET_CONFIRMED, event);

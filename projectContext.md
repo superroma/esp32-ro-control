@@ -50,8 +50,10 @@ Using **HomeSpan** library for native HomeKit integration:
 - ✅ Dual-button navigation (left=previous, right=next) with auto-rotation
 - ✅ Filter status tracking with visual indicators (OK/WARNING/REPLACE)
 - ✅ Counter reset functionality (both buttons for 3 seconds)
-- ✅ Seven main screens: Dashboard, PP1, PP2, Carbon, Membrane, Mineralizer, Usage
-- 🔄 WiFi configuration (WiFiManager - planned next)
+- ✅ Eight main screens: Dashboard, PP1, PP2, Carbon, Membrane, Mineralizer, Usage, WiFi Status
+- ✅ WiFi configuration with WiFiManager - COMPLETED!
+- ✅ WiFi status screen showing connection info and setup instructions
+- ✅ WiFi settings reset functionality (both buttons on WiFi screen)
 - 🔄 HomeKit pairing screen and setup code display
 - 🔄 HomeSpan integration with custom filter accessories
 - 🔄 Flow sensor integration for real water usage tracking

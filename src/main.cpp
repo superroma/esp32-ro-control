@@ -2,6 +2,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "ButtonLogic.h"
+#include "WiFiController.h"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -15,7 +16,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // --- Screen and Filter Management ---
 #define BUTTON_LEFT_PIN 4  // Previous screen
 #define BUTTON_RIGHT_PIN 5 // Next screen (changed from 2 to 5)
-#define NUM_SCREENS 7      // Only normal screens (no counter reset)
+#define NUM_SCREENS 8      // Normal screens + WiFi status screen
 
 enum ScreenType
 {
@@ -26,6 +27,7 @@ enum ScreenType
   SCREEN_MEMBRANE,
   SCREEN_MINERALIZER,
   SCREEN_USAGE,
+  SCREEN_WIFI_STATUS, // New WiFi status screen
   SCREEN_COUNTER_RESET
 };
 
@@ -52,6 +54,9 @@ volatile int currentScreen = 0;
 // ButtonLogic instance for clean button handling
 ButtonLogic buttonLogic;
 
+// WiFi Controller instance
+WiFiController wifiController;
+
 // Button hardware state (managed by interrupts)
 volatile bool leftButtonCurrentlyPressed = false;
 volatile bool rightButtonCurrentlyPressed = false;
@@ -67,6 +72,14 @@ FilterInfo filters[5] = {
     {"MINERALIZR", "MIN", 15, STATUS_WARNING, "2 weeks"}};
 
 unsigned int totalWaterUsed = 1234; // Liters
+
+// Function declarations
+void drawWiFiStatusScreen();
+void drawCounterResetScreen();
+void drawUsageScreen();
+void drawFilterScreen(int filterIndex);
+void drawDashboard();
+void updateFilterStatus();
 
 // Update filter status based on percentage
 void updateFilterStatus()
@@ -269,6 +282,44 @@ void setup()
 
   updateFilterStatus();
   lastScreenChange = millis();
+
+  // Initialize WiFi - show setup screen first
+  Serial.println("Initializing WiFi...");
+  display.clearDisplay();
+
+  // Show WiFi setup instructions
+  display.setTextSize(1);
+  drawCenteredText("WiFi Setup Required", 8, 1);
+
+  // Network name
+  display.setCursor(0, 22);
+  display.print("Network:");
+  display.setCursor(50, 22);
+  display.print("RO-Monitor-Setup");
+
+  // Password
+  display.setCursor(0, 32);
+  display.print("Password:");
+  display.setCursor(50, 32);
+  display.print("setup123");
+
+  // IP Address
+  display.setCursor(0, 42);
+  display.print("Setup IP:");
+  display.setCursor(50, 42);
+  display.print("192.168.4.1");
+
+  // Status
+  drawCenteredText("Starting...", 54, 1);
+  display.display();
+
+  // Initialize WiFi controller
+  wifiController.begin();
+
+  // Show WiFi status after initialization
+  delay(2000);
+  drawWiFiStatusScreen();
+  delay(3000);
 }
 
 void drawDashboard()
@@ -388,15 +439,29 @@ void drawCounterResetScreen()
   }
   else
   {
-    // Show confirmation screen
-    display.setTextSize(2);
-    drawCenteredText("RESET", 0, 2);
-    drawCenteredText("COUNTER?", 20, 2);
+    // Show confirmation screen with context-specific messages
+    if (currentScreen == SCREEN_WIFI_STATUS)
+    {
+      display.setTextSize(2);
+      drawCenteredText("RESET", 0, 2);
+      drawCenteredText("WIFI?", 20, 2);
 
-    // Warning message
-    display.setTextSize(1);
-    drawCenteredText("This will reset", 42, 1);
-    drawCenteredText("all water usage", 52, 1);
+      // Warning message
+      display.setTextSize(1);
+      drawCenteredText("This will reset", 42, 1);
+      drawCenteredText("WiFi settings", 52, 1);
+    }
+    else
+    {
+      display.setTextSize(2);
+      drawCenteredText("RESET", 0, 2);
+      drawCenteredText("COUNTER?", 20, 2);
+
+      // Warning message
+      display.setTextSize(1);
+      drawCenteredText("This will reset", 42, 1);
+      drawCenteredText("all water usage", 52, 1);
+    }
 
     // Physical button instructions at bottom
     display.setTextSize(1);
@@ -406,6 +471,116 @@ void drawCounterResetScreen()
     display.setCursor(90, 56);
     display.print("OK");
   }
+
+  display.display();
+}
+
+void drawWiFiStatusScreen()
+{
+  display.clearDisplay();
+
+  // Title
+  drawCenteredText("WIFI INFO", 0, 2);
+
+  if (wifiController.isConnected())
+  {
+    // Network name (SSID)
+    display.setTextSize(1);
+    display.setCursor(0, 18);
+    display.print("Network:");
+    String ssid = wifiController.getSSID();
+    if (ssid.length() > 10)
+    {
+      ssid = ssid.substring(0, 7) + "...";
+    }
+    display.setCursor(50, 18);
+    display.print(ssid);
+
+    // IP Address
+    display.setCursor(0, 28);
+    display.print("IP:");
+    String ip = wifiController.getIPAddress();
+    display.setCursor(20, 28);
+    display.print(ip);
+
+    // Signal strength
+    int rssi = wifiController.getRSSI();
+    display.setCursor(0, 38);
+    display.print("Signal:");
+    display.setCursor(45, 38);
+    display.print(String(rssi) + "dBm");
+
+    // Connection status
+    display.setCursor(0, 48);
+    display.print("Status: Connected");
+
+    // Signal strength bar (visual indicator)
+    int signalBars = 0;
+    if (rssi > -50)
+      signalBars = 4;
+    else if (rssi > -60)
+      signalBars = 3;
+    else if (rssi > -70)
+      signalBars = 2;
+    else if (rssi > -80)
+      signalBars = 1;
+
+    // Draw signal bars in top right
+    int barX = 100;
+    int barY = 18;
+    for (int i = 0; i < 4; i++)
+    {
+      int barHeight = (i + 1) * 2;
+      if (i < signalBars)
+      {
+        display.fillRect(barX + i * 4, barY + 8 - barHeight, 3, barHeight, WHITE);
+      }
+      else
+      {
+        display.drawRect(barX + i * 4, barY + 8 - barHeight, 3, barHeight, WHITE);
+      }
+    }
+  }
+  else if (wifiController.getStatus() == WiFiStatus::CONFIG_MODE)
+  {
+    // Show setup instructions with network details
+    display.setTextSize(1);
+    drawCenteredText("WiFi Setup Mode", 18, 1);
+
+    // Network name
+    display.setCursor(0, 30);
+    display.print("Network:");
+    display.setCursor(50, 30);
+    display.print(wifiController.getAPName());
+
+    // Password
+    display.setCursor(0, 40);
+    display.print("Password:");
+    display.setCursor(50, 40);
+    display.print(wifiController.getAPPassword());
+
+    // IP Address
+    display.setCursor(0, 50);
+    display.print("Setup IP:");
+    display.setCursor(50, 50);
+    display.print(wifiController.getAPIP());
+  }
+  else
+  {
+    // Show connection attempts or error
+    drawCenteredText("Not Connected", 28, 1);
+    drawCenteredText("Check Settings", 38, 1);
+  }
+
+  // Device name at bottom right
+  display.setTextSize(1);
+  String deviceName = wifiController.getDeviceName();
+  if (deviceName.length() > 12)
+  {
+    deviceName = deviceName.substring(0, 9) + "...";
+  }
+  display.setCursor(128 - deviceName.length() * 6, 58);
+  display.print(deviceName);
 
   display.display();
 }
@@ -472,6 +647,21 @@ void processButtons()
       filters[i].status = STATUS_OK;
       filters[i].timeLeft = "12 months";
     }
+
+    // Special case: if we're on WiFi screen, also reset WiFi settings
+    if (currentScreen == SCREEN_WIFI_STATUS)
+    {
+      Serial.println("Also resetting WiFi settings!");
+      wifiController.resetSettings();
+      // Restart WiFi setup
+      display.clearDisplay();
+      drawCenteredText("WIFI RESET", 20, 2);
+      drawCenteredText("Restarting...", 40, 1);
+      display.display();
+      delay(2000);
+      wifiController.begin();
+    }
+
     currentScreen = SCREEN_DASHBOARD;
     break;
 
@@ -531,13 +721,40 @@ void loop()
       Serial.println("R/r = Right button press/release");
       Serial.println("B/b = Both buttons press");
       Serial.println("U/u = Both buttons release");
+      Serial.println("W/w = WiFi status");
+      Serial.println("C/c = Start WiFi config portal");
+      Serial.println("X/x = Reset WiFi settings");
       Serial.println("H/h = This help");
+      break;
+    case 'W':
+    case 'w':
+      Serial.println("WiFi Status:");
+      Serial.printf("Status: %s\n", wifiController.getStatusString().c_str());
+      Serial.printf("SSID: %s\n", wifiController.getSSID().c_str());
+      Serial.printf("IP: %s\n", wifiController.getIPAddress().c_str());
+      Serial.printf("RSSI: %d dBm\n", wifiController.getRSSI());
+      Serial.printf("Device: %s\n", wifiController.getDeviceName().c_str());
+      break;
+    case 'C':
+    case 'c':
+      Serial.println("Starting WiFi config portal...");
+      wifiController.startConfigPortal();
+      break;
+    case 'X':
+    case 'x':
+      Serial.println("Resetting WiFi settings...");
+      wifiController.resetSettings();
+      delay(1000);
+      wifiController.begin();
       break;
     }
   }
 
   // Process button inputs
   processButtons();
+
+  // Update WiFi controller
+  wifiController.update();
 
   // Update filter status
   updateFilterStatus();
@@ -572,6 +789,9 @@ void loop()
     break;
   case SCREEN_USAGE:
     drawUsageScreen();
+    break;
+  case SCREEN_WIFI_STATUS:
+    drawWiFiStatusScreen();
     break;
   case SCREEN_COUNTER_RESET:
     drawCounterResetScreen();

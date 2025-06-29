@@ -79,7 +79,7 @@ ButtonEvent ButtonLogic::processButtons(const ButtonState &buttons, unsigned lon
     }
 
     // === INDIVIDUAL BUTTON LOGIC ===
-    
+
     // Clear ignore flag if no releases are pending
     if (ignoreNextReleases && !buttons.leftJustReleased && !buttons.rightJustReleased)
     {
@@ -100,7 +100,7 @@ ButtonEvent ButtonLogic::processButtons(const ButtonState &buttons, unsigned lon
     }
 
     // Process confirmation screen button releases (only if not ignoring)
-    else if (resetState.showingCounterReset && resetState.resetConfirmationReady && 
+    else if (resetState.showingCounterReset && resetState.resetConfirmationReady &&
              !waitingForBothRelease && !ignoreNextReleases)
     {
         if (buttons.leftJustReleased)
