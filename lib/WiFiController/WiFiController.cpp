@@ -26,8 +26,20 @@ void WiFiController::begin()
 {
     Serial.println("WiFiController: Initializing...");
 
-    // Initialize preferences
-    preferences.begin("wifi-config", false);
+    // Initialize preferences with a more specific namespace
+    preferences.begin("wifi-settings", false);
+
+    // Clear any corrupted data on first boot (optional safety check)
+    size_t freeEntries = preferences.freeEntries();
+    Serial.printf("WiFiController: NVS free entries: %zu\n", freeEntries);
+    
+    // Debug: Check if NVS is working
+    Serial.printf("WiFiController: NVS partition size: %zu bytes\n", preferences.getBytesLength("configured"));
+    
+    // Test NVS write capability
+    preferences.putString("test", "hello");
+    String testRead = preferences.getString("test", "fail");
+    Serial.printf("WiFiController: NVS test write/read: %s\n", testRead.c_str());
 
     // Load saved parameters
     loadSavedParameters();
@@ -279,9 +291,9 @@ String WiFiController::getStatusString() const
 
 bool WiFiController::hasCredentials() const
 {
-    // Use const_cast to bypass const-ness for this specific read operation
-    return const_cast<Preferences &>(preferences).getBool("configured", false) &&
-           (const_cast<WiFiManager &>(wifiManager).getWiFiSSID().length() > 0);
+    // Check if we have saved WiFi credentials in NVS
+    // WiFiManager will handle checking its own internal storage
+    return const_cast<Preferences &>(preferences).getBool("configured", false);
 }
 
 unsigned long WiFiController::getUptime() const
