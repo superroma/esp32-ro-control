@@ -1,0 +1,317 @@
+// Clean main file using the ButtonLogic class
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "ButtonLogic.h"
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+#define I2C_SDA 21
+#define I2C_SCL 22
+#define BUTTON_LEFT_PIN 4
+#define BUTTON_RIGHT_PIN 5
+#define NUM_SCREENS 7
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+enum ScreenType {
+  SCREEN_DASHBOARD,
+  SCREEN_PP1,
+  SCREEN_PP2,
+  SCREEN_CARBON,
+  SCREEN_MEMBRANE,
+  SCREEN_MINERALIZER,
+  SCREEN_USAGE,
+  SCREEN_COUNTER_RESET
+};
+
+enum FilterStatus {
+  STATUS_OK,
+  STATUS_WARNING,
+  STATUS_REPLACE
+};
+
+struct FilterInfo {
+  String name;
+  String shortName;
+  int percentage;
+  FilterStatus status;
+  String timeLeft;
+};
+
+// Global state
+ButtonLogic buttonLogic;
+volatile int currentScreen = 0;
+unsigned long lastScreenChange = 0;
+const unsigned long screenInterval = 8000;
+
+// Button state (managed by interrupts)
+volatile bool leftButtonCurrentlyPressed = false;
+volatile bool rightButtonCurrentlyPressed = false;
+volatile bool leftButtonJustReleased = false;
+volatile bool rightButtonJustReleased = false;
+
+FilterInfo filters[5] = {
+    {"PP1 FILTER", "PP1", 80, STATUS_OK, "2 months"},
+    {"PP2 FILTER", "PP2", 75, STATUS_OK, "2 months"},
+    {"CARBON", "CAR", 50, STATUS_OK, "1 month"},
+    {"MEMBRANE", "MEM", 60, STATUS_OK, "3 months"},
+    {"MINERALIZR", "MIN", 15, STATUS_WARNING, "2 weeks"}
+};
+
+unsigned int totalWaterUsed = 1234;
+
+// === INTERRUPT HANDLERS ===
+void IRAM_ATTR handleLeftButton() {
+  bool currentState = digitalRead(BUTTON_LEFT_PIN) == LOW;
+  
+  if (currentState && !leftButtonCurrentlyPressed) {
+    leftButtonCurrentlyPressed = true;
+    Serial.println("Left button pressed!");
+  }
+  else if (!currentState && leftButtonCurrentlyPressed) {
+    leftButtonCurrentlyPressed = false;
+    leftButtonJustReleased = true;
+    Serial.println("Left button released!");
+  }
+}
+
+void IRAM_ATTR handleRightButton() {
+  bool currentState = digitalRead(BUTTON_RIGHT_PIN) == LOW;
+  
+  if (currentState && !rightButtonCurrentlyPressed) {
+    rightButtonCurrentlyPressed = true;
+    Serial.println("Right button pressed!");
+  }
+  else if (!currentState && rightButtonCurrentlyPressed) {
+    rightButtonCurrentlyPressed = false;
+    rightButtonJustReleased = true;
+    Serial.println("Right button released!");
+  }
+}
+
+// === DISPLAY FUNCTIONS ===
+void updateFilterStatus() {
+  for (int i = 0; i < 5; i++) {
+    if (filters[i].percentage < 10) {
+      filters[i].status = STATUS_REPLACE;
+    } else if (filters[i].percentage < 20) {
+      filters[i].status = STATUS_WARNING;
+    } else {
+      filters[i].status = STATUS_OK;
+    }
+  }
+}
+
+void drawCenteredText(String text, int y, int textSize) {
+  display.setTextSize(textSize);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  int x = (SCREEN_WIDTH - w) / 2;
+  display.setCursor(x, y);
+  display.print(text);
+}
+
+void drawCounterResetScreen() {
+  display.clearDisplay();
+  const ResetState& resetState = buttonLogic.getResetState();
+
+  if (resetState.showingResetProgress) {
+    display.setTextSize(2);
+    drawCenteredText("HOLD", 10, 2);
+    drawCenteredText("BUTTONS", 30, 2);
+
+    // Draw progress bar
+    int barWidth = 100;
+    int barHeight = 8;
+    int barX = (SCREEN_WIDTH - barWidth) / 2;
+    int barY = 50;
+
+    display.drawRect(barX, barY, barWidth, barHeight, WHITE);
+    int fillWidth = (barWidth - 2) * resetState.progressPercent / 100;
+    if (fillWidth > 0) {
+      display.fillRect(barX + 1, barY + 1, fillWidth, barHeight - 2, WHITE);
+    }
+  } else {
+    display.setTextSize(2);
+    drawCenteredText("RESET", 0, 2);
+    drawCenteredText("COUNTER?", 20, 2);
+
+    display.setTextSize(1);
+    drawCenteredText("This will reset", 42, 1);
+    drawCenteredText("all water usage", 52, 1);
+
+    display.setCursor(0, 56);
+    display.print("CANCEL");
+    display.setCursor(90, 56);
+    display.print("OK");
+  }
+
+  display.display();
+}
+
+void drawDashboard() {
+  display.clearDisplay();
+  drawCenteredText("RO SYSTEM", 0, 2);
+  // Add your dashboard drawing code here
+  display.display();
+}
+
+void drawFilterScreen(int filterIndex) {
+  display.clearDisplay();
+  FilterInfo filter = filters[filterIndex];
+  drawCenteredText(filter.name, 0, 2);
+  // Add your filter screen drawing code here
+  display.display();
+}
+
+void drawUsageScreen() {
+  display.clearDisplay();
+  drawCenteredText("USAGE", 0, 2);
+  
+  display.setTextSize(3);
+  String waterText = String(totalWaterUsed);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(waterText, 0, 0, &x1, &y1, &w, &h);
+  int x = (SCREEN_WIDTH - w) / 2;
+  display.setCursor(x, 20);
+  display.print(waterText);
+
+  display.setTextSize(2);
+  display.getTextBounds("LITERS", 0, 0, &x1, &y1, &w, &h);
+  x = (SCREEN_WIDTH - w) / 2;
+  display.setCursor(x, 45);
+  display.print("LITERS");
+  
+  display.display();
+}
+
+void processButtonEvent(ButtonEvent event) {
+  switch (event) {
+    case ButtonEvent::LEFT_RELEASED:
+      Serial.println("Left button action - previous screen");
+      currentScreen = (currentScreen - 1 + NUM_SCREENS) % NUM_SCREENS;
+      lastScreenChange = millis();
+      break;
+      
+    case ButtonEvent::RIGHT_RELEASED:
+      Serial.println("Right button action - next screen");
+      currentScreen = (currentScreen + 1) % NUM_SCREENS;
+      lastScreenChange = millis();
+      break;
+      
+    case ButtonEvent::RESET_PROGRESS_STARTED:
+      Serial.println("Reset progress started");
+      currentScreen = SCREEN_COUNTER_RESET;
+      break;
+      
+    case ButtonEvent::RESET_PROGRESS_UPDATED:
+      // Visual update handled in draw function
+      break;
+      
+    case ButtonEvent::RESET_CONFIRMATION_READY:
+      Serial.println("Reset confirmation ready");
+      break;
+      
+    case ButtonEvent::RESET_CANCELLED:
+      Serial.println("Reset cancelled");
+      currentScreen = SCREEN_DASHBOARD;
+      break;
+      
+    case ButtonEvent::RESET_CONFIRMED:
+      Serial.println("Reset confirmed - resetting counters");
+      // Reset all data
+      totalWaterUsed = 0;
+      for (int i = 0; i < 5; i++) {
+        filters[i].percentage = 100;
+        filters[i].status = STATUS_OK;
+        filters[i].timeLeft = "12 months";
+      }
+      currentScreen = SCREEN_DASHBOARD;
+      break;
+      
+    case ButtonEvent::NONE:
+    default:
+      // No action needed
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("RO Monitor Starting...");
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(WHITE);
+
+  pinMode(BUTTON_LEFT_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_RIGHT_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_LEFT_PIN), handleLeftButton, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_RIGHT_PIN), handleRightButton, CHANGE);
+
+  Serial.println("Clean ButtonLogic implementation ready!");
+  updateFilterStatus();
+  lastScreenChange = millis();
+}
+
+void loop() {
+  // Create button state for the logic processor
+  ButtonState buttons;
+  buttons.leftPressed = leftButtonCurrentlyPressed;
+  buttons.rightPressed = rightButtonCurrentlyPressed;
+  buttons.leftJustReleased = leftButtonJustReleased;
+  buttons.rightJustReleased = rightButtonJustReleased;
+  
+  // Clear the "just released" flags after reading them
+  leftButtonJustReleased = false;
+  rightButtonJustReleased = false;
+
+  // Process buttons using clean logic
+  ButtonEvent event = buttonLogic.processButtons(buttons, millis());
+  
+  // Handle the event
+  processButtonEvent(event);
+
+  // Update filter status
+  updateFilterStatus();
+
+  // Auto-rotate screens (only if not in reset mode)
+  if (!buttonLogic.isInResetMode() && millis() - lastScreenChange > screenInterval) {
+    currentScreen = (currentScreen + 1) % NUM_SCREENS;
+    lastScreenChange = millis();
+  }
+
+  // Draw current screen
+  switch (currentScreen) {
+    case SCREEN_DASHBOARD:
+      drawDashboard();
+      break;
+    case SCREEN_PP1:
+      drawFilterScreen(0);
+      break;
+    case SCREEN_PP2:
+      drawFilterScreen(1);
+      break;
+    case SCREEN_CARBON:
+      drawFilterScreen(2);
+      break;
+    case SCREEN_MEMBRANE:
+      drawFilterScreen(3);
+      break;
+    case SCREEN_MINERALIZER:
+      drawFilterScreen(4);
+      break;
+    case SCREEN_USAGE:
+      drawUsageScreen();
+      break;
+    case SCREEN_COUNTER_RESET:
+      drawCounterResetScreen();
+      break;
+  }
+
+  delay(100);
+}

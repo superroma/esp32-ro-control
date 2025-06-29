@@ -1,6 +1,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "ButtonLogic.h"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -13,7 +14,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // --- Screen and Filter Management ---
 #define BUTTON_LEFT_PIN 4  // Previous screen
-#define BUTTON_RIGHT_PIN 2 // Next screen
+#define BUTTON_RIGHT_PIN 5 // Next screen (changed from 2 to 5)
 #define NUM_SCREENS 7      // Only normal screens (no counter reset)
 
 enum ScreenType
@@ -48,18 +49,14 @@ unsigned long lastScreenChange = 0;
 const unsigned long screenInterval = 8000; // 8 seconds
 volatile int currentScreen = 0;
 
-// Button handling variables
-volatile bool leftButtonPressed = false;
-volatile bool rightButtonPressed = false;
-volatile unsigned long leftButtonPressTime = 0;
-volatile unsigned long rightButtonPressTime = 0;
-volatile bool bothButtonsPressed = false;
-volatile unsigned long bothButtonsStartTime = 0;
-const unsigned long longPressTime = 3000; // 3 seconds
+// ButtonLogic instance for clean button handling
+ButtonLogic buttonLogic;
 
-// Counter reset screen state
-bool showingCounterReset = false;
-bool resetConfirmSelected = false; // false = cancel, true = ok
+// Button hardware state (managed by interrupts)
+volatile bool leftButtonCurrentlyPressed = false;
+volatile bool rightButtonCurrentlyPressed = false;
+volatile bool leftButtonJustReleased = false;
+volatile bool rightButtonJustReleased = false;
 
 // Filter data
 FilterInfo filters[5] = {
@@ -203,30 +200,49 @@ void drawCenteredText(String text, int y, int textSize)
 
 void IRAM_ATTR handleLeftButton()
 {
-  leftButtonPressed = true;
-  leftButtonPressTime = millis();
+  // Detect press/release based on current pin state
+  bool currentState = digitalRead(BUTTON_LEFT_PIN) == LOW; // LOW = pressed (with pullup)
 
-  if (rightButtonPressed && (millis() - rightButtonPressTime < 500))
+  if (currentState && !leftButtonCurrentlyPressed)
   {
-    bothButtonsPressed = true;
-    bothButtonsStartTime = millis();
+    // Button just pressed
+    leftButtonCurrentlyPressed = true;
+    Serial.println("Left button pressed!");
+  }
+  else if (!currentState && leftButtonCurrentlyPressed)
+  {
+    // Button just released
+    leftButtonCurrentlyPressed = false;
+    leftButtonJustReleased = true;
+    Serial.println("Left button released!");
   }
 }
 
 void IRAM_ATTR handleRightButton()
 {
-  rightButtonPressed = true;
-  rightButtonPressTime = millis();
+  // Detect press/release based on current pin state
+  bool currentState = digitalRead(BUTTON_RIGHT_PIN) == LOW; // LOW = pressed (with pullup)
 
-  if (leftButtonPressed && (millis() - leftButtonPressTime < 500))
+  if (currentState && !rightButtonCurrentlyPressed)
   {
-    bothButtonsPressed = true;
-    bothButtonsStartTime = millis();
+    // Button just pressed
+    rightButtonCurrentlyPressed = true;
+    Serial.println("Right button pressed!");
+  }
+  else if (!currentState && rightButtonCurrentlyPressed)
+  {
+    // Button just released
+    rightButtonCurrentlyPressed = false;
+    rightButtonJustReleased = true;
+    Serial.println("Right button released!");
   }
 }
 
 void setup()
 {
+  Serial.begin(115200);
+  Serial.println("RO Monitor Starting...");
+
   Wire.begin(I2C_SDA, I2C_SCL);
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.setTextColor(WHITE);
@@ -234,8 +250,22 @@ void setup()
   // Setup both buttons
   pinMode(BUTTON_LEFT_PIN, INPUT_PULLUP);
   pinMode(BUTTON_RIGHT_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_LEFT_PIN), handleLeftButton, FALLING);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_RIGHT_PIN), handleRightButton, FALLING);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_LEFT_PIN), handleLeftButton, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_RIGHT_PIN), handleRightButton, CHANGE);
+
+  Serial.println("Buttons configured:");
+  Serial.print("Left button (GPIO ");
+  Serial.print(BUTTON_LEFT_PIN);
+  Serial.println(")");
+  Serial.print("Right button (GPIO ");
+  Serial.print(BUTTON_RIGHT_PIN);
+  Serial.println(")");
+
+  // Test button states
+  Serial.print("Initial GPIO 4 state: ");
+  Serial.println(digitalRead(BUTTON_LEFT_PIN));
+  Serial.print("Initial GPIO 5 state: ");
+  Serial.println(digitalRead(BUTTON_RIGHT_PIN));
 
   updateFilterStatus();
   lastScreenChange = millis();
@@ -331,129 +361,181 @@ void drawCounterResetScreen()
 {
   display.clearDisplay();
 
-  // Title
-  drawCenteredText("RESET COUNTER", 0, 1);
+  const ResetState &resetState = buttonLogic.getResetState();
 
-  // Warning message
-  display.setTextSize(1);
-  drawCenteredText("This will reset", 15, 1);
-  drawCenteredText("water usage to 0", 25, 1);
-
-  // Options
-  int buttonY = 45;
-  int buttonWidth = 50;
-  int buttonHeight = 15;
-  int cancelX = 10;
-  int okX = 68;
-
-  // Cancel button
-  if (!resetConfirmSelected)
+  if (resetState.showingResetProgress)
   {
-    display.fillRect(cancelX, buttonY, buttonWidth, buttonHeight, WHITE);
-    display.setTextColor(BLACK);
+    // Show progress bar while both buttons are held
+    display.setTextSize(2);
+    drawCenteredText("HOLD", 10, 2);
+    drawCenteredText("BUTTONS", 30, 2);
+
+    // Draw progress bar using the current progress value from ButtonLogic
+    int barWidth = 100;
+    int barHeight = 8;
+    int barX = (SCREEN_WIDTH - barWidth) / 2;
+    int barY = 50;
+
+    // Progress bar background
+    display.drawRect(barX, barY, barWidth, barHeight, WHITE);
+
+    // Progress bar fill based on ButtonLogic progress
+    int fillWidth = (barWidth - 2) * resetState.progressPercent / 100;
+    if (fillWidth > 0)
+    {
+      display.fillRect(barX + 1, barY + 1, fillWidth, barHeight - 2, WHITE);
+    }
   }
   else
   {
-    display.drawRect(cancelX, buttonY, buttonWidth, buttonHeight, WHITE);
-    display.setTextColor(WHITE);
-  }
-  display.setCursor(cancelX + 12, buttonY + 4);
-  display.print("CANCEL");
+    // Show confirmation screen
+    display.setTextSize(2);
+    drawCenteredText("RESET", 0, 2);
+    drawCenteredText("COUNTER?", 20, 2);
 
-  // OK button
-  if (resetConfirmSelected)
-  {
-    display.fillRect(okX, buttonY, buttonWidth, buttonHeight, WHITE);
-    display.setTextColor(BLACK);
-  }
-  else
-  {
-    display.drawRect(okX, buttonY, buttonWidth, buttonHeight, WHITE);
-    display.setTextColor(WHITE);
-  }
-  display.setCursor(okX + 20, buttonY + 4);
-  display.print("OK");
+    // Warning message
+    display.setTextSize(1);
+    drawCenteredText("This will reset", 42, 1);
+    drawCenteredText("all water usage", 52, 1);
 
-  display.setTextColor(WHITE); // Reset color
+    // Physical button instructions at bottom
+    display.setTextSize(1);
+    display.setCursor(0, 56);
+    display.print("CANCEL");
+
+    display.setCursor(90, 56);
+    display.print("OK");
+  }
+
   display.display();
 }
 
 void processButtons()
 {
-  // Handle both buttons pressed for counter reset
-  if (bothButtonsPressed)
-  {
-    if (millis() - bothButtonsStartTime >= longPressTime)
-    {
-      if (!showingCounterReset)
-      {
-        showingCounterReset = true;
-        resetConfirmSelected = false; // Default to cancel
-        currentScreen = SCREEN_COUNTER_RESET;
-      }
-      bothButtonsPressed = false;
-      leftButtonPressed = false;
-      rightButtonPressed = false;
-    }
-    return; // Don't process individual buttons while both are pressed
-  }
+  // Create button state from hardware interrupts
+  ButtonState buttons;
+  buttons.leftPressed = leftButtonCurrentlyPressed;
+  buttons.rightPressed = rightButtonCurrentlyPressed;
+  buttons.leftJustReleased = leftButtonJustReleased;
+  buttons.rightJustReleased = rightButtonJustReleased;
 
-  // Handle individual button presses
-  if (leftButtonPressed)
-  {
-    leftButtonPressed = false;
+  // Process buttons through the ButtonLogic class
+  ButtonEvent event = buttonLogic.processButtons(buttons, millis());
 
-    if (showingCounterReset)
-    {
-      resetConfirmSelected = !resetConfirmSelected; // Toggle selection
-    }
-    else
-    {
-      // Previous screen (only normal screens)
-      currentScreen = (currentScreen - 1 + NUM_SCREENS) % NUM_SCREENS;
-    }
+  // Clear the release flags after processing
+  leftButtonJustReleased = false;
+  rightButtonJustReleased = false;
+
+  // Handle the events from ButtonLogic
+  switch (event)
+  {
+  case ButtonEvent::LEFT_RELEASED:
+    // Previous screen (only normal screens)
+    currentScreen = (currentScreen - 1 + NUM_SCREENS) % NUM_SCREENS;
     lastScreenChange = millis();
-  }
+    Serial.println("Left button released - previous screen");
+    break;
 
-  if (rightButtonPressed)
-  {
-    rightButtonPressed = false;
-
-    if (showingCounterReset)
-    {
-      if (resetConfirmSelected)
-      {
-        // Reset counter
-        totalWaterUsed = 0;
-        // Reset all filter percentages to 100%
-        for (int i = 0; i < 5; i++)
-        {
-          filters[i].percentage = 100;
-          filters[i].status = STATUS_OK;
-          filters[i].timeLeft = "12 months"; // Reset time estimates
-        }
-      }
-      // Exit counter reset screen
-      showingCounterReset = false;
-      currentScreen = SCREEN_DASHBOARD;
-    }
-    else
-    {
-      // Next screen (only normal screens)
-      currentScreen = (currentScreen + 1) % NUM_SCREENS;
-    }
+  case ButtonEvent::RIGHT_RELEASED:
+    // Next screen (only normal screens)
+    currentScreen = (currentScreen + 1) % NUM_SCREENS;
     lastScreenChange = millis();
-  }
+    Serial.println("Right button released - next screen");
+    break;
 
-  // Reset both buttons pressed flag if buttons released
-  if (!digitalRead(BUTTON_LEFT_PIN) && !digitalRead(BUTTON_RIGHT_PIN))
-  {
-    bothButtonsPressed = false;
+  case ButtonEvent::RESET_PROGRESS_STARTED:
+    currentScreen = SCREEN_COUNTER_RESET;
+    Serial.println("Reset progress started");
+    break;
+
+  case ButtonEvent::RESET_PROGRESS_UPDATED:
+    // Progress is automatically tracked in ButtonLogic
+    break;
+
+  case ButtonEvent::RESET_CONFIRMATION_READY:
+    Serial.println("Reset confirmation ready");
+    break;
+
+  case ButtonEvent::RESET_CANCELLED:
+    Serial.println("Counter reset cancelled!");
+    currentScreen = SCREEN_DASHBOARD;
+    break;
+
+  case ButtonEvent::RESET_CONFIRMED:
+    Serial.println("Resetting counter!");
+    // Reset counter
+    totalWaterUsed = 0;
+    // Reset all filter percentages to 100%
+    for (int i = 0; i < 5; i++)
+    {
+      filters[i].percentage = 100;
+      filters[i].status = STATUS_OK;
+      filters[i].timeLeft = "12 months";
+    }
+    currentScreen = SCREEN_DASHBOARD;
+    break;
+
+  case ButtonEvent::NONE:
+  default:
+    // No action needed
+    break;
   }
 }
 
 void loop()
 {
+  // Check for serial commands for testing (remove in production)
+  if (Serial.available())
+  {
+    char cmd = Serial.read();
+    switch (cmd)
+    {
+    case 'L':
+    case 'l':
+      // Simulate left button press and release
+      Serial.println("SIMULATE: Left button press/release");
+      leftButtonCurrentlyPressed = true;
+      delay(50);
+      leftButtonCurrentlyPressed = false;
+      leftButtonJustReleased = true;
+      break;
+    case 'R':
+    case 'r':
+      // Simulate right button press and release
+      Serial.println("SIMULATE: Right button press/release");
+      rightButtonCurrentlyPressed = true;
+      delay(50);
+      rightButtonCurrentlyPressed = false;
+      rightButtonJustReleased = true;
+      break;
+    case 'B':
+    case 'b':
+      // Simulate both buttons press
+      Serial.println("SIMULATE: Both buttons pressed");
+      leftButtonCurrentlyPressed = true;
+      rightButtonCurrentlyPressed = true;
+      break;
+    case 'U':
+    case 'u':
+      // Simulate both buttons release
+      Serial.println("SIMULATE: Both buttons released");
+      leftButtonCurrentlyPressed = false;
+      rightButtonCurrentlyPressed = false;
+      leftButtonJustReleased = false;
+      rightButtonJustReleased = false;
+      break;
+    case 'H':
+    case 'h':
+      Serial.println("HELP:");
+      Serial.println("L/l = Left button press/release");
+      Serial.println("R/r = Right button press/release");
+      Serial.println("B/b = Both buttons press");
+      Serial.println("U/u = Both buttons release");
+      Serial.println("H/h = This help");
+      break;
+    }
+  }
+
   // Process button inputs
   processButtons();
 
@@ -461,7 +543,7 @@ void loop()
   updateFilterStatus();
 
   // Auto-rotate screens (only if not showing counter reset)
-  if (!showingCounterReset && millis() - lastScreenChange > screenInterval)
+  if (!buttonLogic.isInResetMode() && millis() - lastScreenChange > screenInterval)
   {
     currentScreen = (currentScreen + 1) % NUM_SCREENS;
     lastScreenChange = millis();
