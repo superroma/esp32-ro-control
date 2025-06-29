@@ -3,6 +3,7 @@
 #include <Adafruit_SSD1306.h>
 #include "ButtonLogic.h"
 #include "WiFiController.h"
+#include "HomeKitController.h"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -16,7 +17,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // --- Screen and Filter Management ---
 #define BUTTON_LEFT_PIN 4  // Previous screen
 #define BUTTON_RIGHT_PIN 5 // Next screen (changed from 2 to 5)
-#define NUM_SCREENS 8      // Normal screens + WiFi status screen
+#define NUM_SCREENS 9      // Normal screens + WiFi status screen + HomeKit screen
 
 enum ScreenType
 {
@@ -27,7 +28,8 @@ enum ScreenType
   SCREEN_MEMBRANE,
   SCREEN_MINERALIZER,
   SCREEN_USAGE,
-  SCREEN_WIFI_STATUS, // New WiFi status screen
+  SCREEN_WIFI_STATUS,    // WiFi status screen
+  SCREEN_HOMEKIT_STATUS, // New HomeKit status screen
   SCREEN_COUNTER_RESET
 };
 
@@ -57,6 +59,9 @@ ButtonLogic buttonLogic;
 // WiFi Controller instance
 WiFiController wifiController;
 
+// HomeKit Controller instance
+HomeKitController homeKitController;
+
 // Button hardware state (managed by interrupts)
 volatile bool leftButtonCurrentlyPressed = false;
 volatile bool rightButtonCurrentlyPressed = false;
@@ -75,6 +80,7 @@ unsigned int totalWaterUsed = 1234; // Liters
 
 // Function declarations
 void drawWiFiStatusScreen();
+void drawHomeKitStatusScreen();
 void drawCounterResetScreen();
 void drawUsageScreen();
 void drawFilterScreen(int filterIndex);
@@ -320,6 +326,12 @@ void setup()
   delay(2000);
   drawWiFiStatusScreen();
   delay(3000);
+
+  // Initialize HomeKit after WiFi (will start once WiFi is connected)
+  Serial.println("Starting HomeKit initialization...");
+  drawCenteredText("Starting HomeKit", 54, 1);
+  display.display();
+  delay(1000);
 }
 
 void drawDashboard()
@@ -585,6 +597,88 @@ void drawWiFiStatusScreen()
   display.display();
 }
 
+void drawHomeKitStatusScreen()
+{
+  display.clearDisplay();
+
+  // Title
+  drawCenteredText("HOMEKIT", 0, 2);
+
+  HomeKitStatus hkStatus = homeKitController.getStatus();
+
+  if (hkStatus == HOMEKIT_NOT_INITIALIZED)
+  {
+    // HomeKit not initialized yet
+    display.setTextSize(1);
+    drawCenteredText("Initializing...", 20, 1);
+    drawCenteredText("Please wait", 30, 1);
+  }
+  else if (hkStatus == HOMEKIT_WAITING_FOR_PAIRING)
+  {
+    // Show pairing instructions
+    display.setTextSize(1);
+    drawCenteredText("Ready to Pair", 18, 1);
+
+    // Setup code (large and prominent)
+    display.setTextSize(2);
+    String setupCode = homeKitController.getSetupCode();
+    drawCenteredText(setupCode, 28, 2);
+
+    // Instructions
+    display.setTextSize(1);
+    drawCenteredText("Enter in Home app", 48, 1);
+    drawCenteredText("Add Accessory", 58, 1);
+  }
+  else if (hkStatus == HOMEKIT_PAIRED)
+  {
+    // Paired but not connected
+    display.setTextSize(1);
+    drawCenteredText("HomeKit Paired", 20, 1);
+    drawCenteredText("Connecting...", 30, 1);
+
+    // Show device count
+    display.setCursor(0, 42);
+    display.print("Devices: 6"); // 5 filters + 1 usage sensor
+
+    // Show status
+    display.setCursor(0, 52);
+    display.print("Status: Paired");
+  }
+  else if (hkStatus == HOMEKIT_RUNNING)
+  {
+    // Connected and running
+    display.setTextSize(1);
+    drawCenteredText("HomeKit Active", 18, 1);
+
+    // Connected icon
+    display.fillCircle(10, 28, 3, WHITE);
+    display.setCursor(18, 25);
+    display.print("Connected");
+
+    // Device count
+    display.setCursor(0, 35);
+    display.print("Filters: 5 active");
+
+    // Usage sensor
+    display.setCursor(0, 45);
+    display.print("Usage: Monitoring");
+
+    // Instructions
+    display.setTextSize(1);
+    display.setCursor(0, 55);
+    display.print("Use iOS Home app");
+  }
+  else
+  {
+    // Error state
+    display.setTextSize(1);
+    drawCenteredText("HomeKit Error", 25, 1);
+    drawCenteredText("Check connection", 38, 1);
+  }
+
+  display.display();
+}
+
 void processButtons()
 {
   // Create button state from hardware interrupts
@@ -724,6 +818,8 @@ void loop()
       Serial.println("W/w = WiFi status");
       Serial.println("C/c = Start WiFi config portal");
       Serial.println("X/x = Reset WiFi settings");
+      Serial.println("K/k = HomeKit status");
+      Serial.println("P/p = Reset HomeKit pairing");
       Serial.println("H/h = This help");
       break;
     case 'W':
@@ -747,6 +843,18 @@ void loop()
       delay(1000);
       wifiController.begin();
       break;
+    case 'K':
+    case 'k':
+      Serial.println("HomeKit Status:");
+      Serial.printf("Status: %s\n", homeKitController.getStatusString().c_str());
+      Serial.printf("Setup Code: %s\n", homeKitController.getSetupCode().c_str());
+      Serial.printf("Paired: %s\n", homeKitController.isPaired() ? "Yes" : "No");
+      break;
+    case 'P':
+    case 'p':
+      Serial.println("Resetting HomeKit pairing...");
+      homeKitController.resetPairing();
+      break;
     }
   }
 
@@ -755,6 +863,22 @@ void loop()
 
   // Update WiFi controller
   wifiController.update();
+
+  // Initialize HomeKit when WiFi is connected (one-time initialization)
+  static bool homeKitInitialized = false;
+  if (!homeKitInitialized && wifiController.isConnected())
+  {
+    Serial.println("WiFi connected, initializing HomeKit...");
+    homeKitController.begin(filters);
+    homeKitInitialized = true;
+  }
+
+  // Update HomeKit controller if initialized
+  if (homeKitInitialized)
+  {
+    homeKitController.update();
+    homeKitController.updateFilterAccessories(filters);
+  }
 
   // Update filter status
   updateFilterStatus();
@@ -792,6 +916,9 @@ void loop()
     break;
   case SCREEN_WIFI_STATUS:
     drawWiFiStatusScreen();
+    break;
+  case SCREEN_HOMEKIT_STATUS:
+    drawHomeKitStatusScreen();
     break;
   case SCREEN_COUNTER_RESET:
     drawCounterResetScreen();
