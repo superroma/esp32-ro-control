@@ -30,9 +30,15 @@ Using **WiFiManager** library for user-friendly configuration:
 
 - Device creates "RO-Monitor-Setup" WiFi hotspot when unconfigured
 - Users connect and configure via web interface (192.168.4.1)
-- Supports custom parameters: device name, filter thresholds, HomeKit setup preferences
+- Enhanced setup screen displays clear connection instructions on OLED:
+  - Network name: "RO-Monitor-Setup"
+  - Password: "setup123"
+  - Setup IP: "192.168.4.1"
+- Supports custom parameters: device name, NTP server, timezone offset
 - Automatic reconnection with fallback to setup mode
 - Credentials stored persistently in ESP32 NVS
+- WiFi status screen shows current connection details when connected
+- Reset functionality available through button combination on WiFi screen
 
 ## HomeKit Integration Strategy
 
@@ -51,12 +57,40 @@ Using **HomeSpan** library for native HomeKit integration:
 - ✅ Filter status tracking with visual indicators (OK/WARNING/REPLACE)
 - ✅ Counter reset functionality (both buttons for 3 seconds)
 - ✅ Eight main screens: Dashboard, PP1, PP2, Carbon, Membrane, Mineralizer, Usage, WiFi Status
-- ✅ WiFi configuration with WiFiManager - COMPLETED!
+- ✅ WiFi configuration with WiFiManager - FULLY OPERATIONAL!
 - ✅ WiFi status screen showing connection info and setup instructions
 - ✅ WiFi settings reset functionality (both buttons on WiFi screen)
+- ✅ Enhanced WiFi setup screen with clear connection instructions (SSID, password, IP)
+- ✅ Serial communication debugging and monitoring (115200 baud)
+- ✅ WiFi configuration portal tested and working (connects to network successfully)
 - 🔄 HomeKit pairing screen and setup code display
 - 🔄 HomeSpan integration with custom filter accessories
 - 🔄 Flow sensor integration for real water usage tracking
 - 🔄 Real-time filter lifecycle calculations based on actual usage
+
+## Recent Updates & Bug Fixes
+
+### WiFi Configuration Enhancement (Latest)
+
+- ✅ **Enhanced Setup Screen**: Initial WiFi setup screen now displays comprehensive connection instructions
+- ✅ **Clear User Instructions**: Shows network name, password, and IP address on OLED during setup
+- ✅ **Improved User Experience**: Users can see connection details immediately upon device startup
+- ✅ **Dynamic Information Display**: WiFi status screen shows both setup mode and connected state information
+
+### Serial Communication Fix (Resolved)
+
+- ✅ **Baud Rate Issue Resolved**: Fixed garbled serial output (`�x␀�x�x␀�x...`)
+- ✅ **Correct Serial Configuration**: Confirmed 115200 baud rate matching between code and PlatformIO config
+- ✅ **Serial Monitoring Working**: PlatformIO monitor command now works correctly
+- ✅ **Debug Output Functional**: WiFi connection process visible through serial monitor
+
+### WiFi Connection Testing (Verified)
+
+- ✅ **Access Point Creation**: ESP32 successfully creates "RO-Monitor-Setup" hotspot
+- ✅ **Web Portal Functional**: Configuration portal accessible at 192.168.4.1
+- ✅ **Network Connection**: Successfully connects to home WiFi network
+- ✅ **Parameter Persistence**: Device name, NTP server, and timezone settings saved correctly
+- ✅ **IP Assignment**: Receives and displays local network IP address (192.168.1.123)
+- ✅ **Signal Monitoring**: RSSI signal strength monitoring functional (-86 dBm observed)
 
 The goal is to create a smart RO system dashboard with native HomeKit integration that provides local OLED display monitoring plus iOS Home app control, Siri voice commands, and automated maintenance reminders without requiring any additional smart home hubs.
