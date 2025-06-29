@@ -32,10 +32,10 @@ void WiFiController::begin()
     // Clear any corrupted data on first boot (optional safety check)
     size_t freeEntries = preferences.freeEntries();
     Serial.printf("WiFiController: NVS free entries: %zu\n", freeEntries);
-    
+
     // Debug: Check if NVS is working
     Serial.printf("WiFiController: NVS partition size: %zu bytes\n", preferences.getBytesLength("configured"));
-    
+
     // Test NVS write capability
     preferences.putString("test", "hello");
     String testRead = preferences.getString("test", "fail");
