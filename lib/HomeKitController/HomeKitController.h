@@ -52,6 +52,8 @@ public:
     void updateFilterAccessories(FilterInfo filters[5]);
     String getStatusString();
     void resetPairing();
+    void printDiagnostics();            // New diagnostic method
+    void setPairingStatus(bool paired); // Manual pairing status update
 };
 
 #endif

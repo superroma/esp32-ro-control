@@ -79,7 +79,7 @@ Using **HomeSpan** library for native HomeKit integration:
 
 ## Recent Updates & Bug Fixes
 
-### HomeKit Integration (Latest - MAJOR UPDATE)
+### HomeKit Integration (Latest - MAJOR UPDATE + CONNECTION FIX)
 
 - ✅ **HomeSpan Library Integration**: Successfully integrated HomeSpan v1.9.1 for native HomeKit support
 - ✅ **Custom HomeKit Accessories**: Created 5 individual FilterMaintenance accessories for each filter
@@ -93,6 +93,9 @@ Using **HomeSpan** library for native HomeKit integration:
 - ✅ **Partition Table Optimization**: Updated to huge_app.csv for larger application size
 - ✅ **Automatic Initialization**: HomeKit starts automatically when WiFi connects
 - ✅ **Native iOS Integration**: Full Home app support with Siri control and automation
+- ✅ **Connection Issue Fix**: Improved accessory initialization with proper error handling and logging
+- ✅ **Enhanced Debugging**: Added detailed logging at LogLevel 2 for connection troubleshooting
+- ✅ **Stable Home App Connection**: Fixed "spinning" issue with better accessory response handling
 
 ### WiFi Configuration Enhancement (Completed)
 

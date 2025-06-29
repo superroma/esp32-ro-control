@@ -819,7 +819,9 @@ void loop()
       Serial.println("C/c = Start WiFi config portal");
       Serial.println("X/x = Reset WiFi settings");
       Serial.println("K/k = HomeKit status");
+      Serial.println("D/d = HomeKit diagnostics");
       Serial.println("P/p = Reset HomeKit pairing");
+      Serial.println("S/s = Set HomeKit as paired (for testing)");
       Serial.println("H/h = This help");
       break;
     case 'W':
@@ -850,10 +852,19 @@ void loop()
       Serial.printf("Setup Code: %s\n", homeKitController.getSetupCode().c_str());
       Serial.printf("Paired: %s\n", homeKitController.isPaired() ? "Yes" : "No");
       break;
+    case 'D':
+    case 'd':
+      homeKitController.printDiagnostics();
+      break;
     case 'P':
     case 'p':
       Serial.println("Resetting HomeKit pairing...");
       homeKitController.resetPairing();
+      break;
+    case 'S':
+    case 's':
+      Serial.println("Setting HomeKit status to paired (for testing)...");
+      homeKitController.setPairingStatus(true);
       break;
     }
   }
